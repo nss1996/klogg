@@ -263,6 +263,23 @@ jobs:
       - uses: ./.github/actions/agent-run-tests
         continue-on-error: true
 
+      - name: Bundle Qt DLLs with windeployqt
+        shell: cmd
+        run: |
+          set "QTDIR=${{ env.KLOGG_QT_DIR }}"
+          set "QTDIR=%QTDIR:/=\%"
+          echo "QTDIR=%QTDIR%"
+          if exist "%QTDIR%\bin\windeployqt.exe" (
+            "%QTDIR%\bin\windeployqt.exe" --no-translations --no-system-d3d-compiler --no-opengl-sw "%KLOGG_BUILD_ROOT%\output\klogg.exe"
+            "%QTDIR%\bin\windeployqt.exe" --no-translations --no-system-d3d-compiler --no-opengl-sw "%KLOGG_BUILD_ROOT%\output\klogg_portable.exe"
+          ) else if exist "%QTDIR%\bin\windeployqt6.exe" (
+            "%QTDIR%\bin\windeployqt6.exe" --no-translations --no-system-d3d-compiler --no-opengl-sw "%KLOGG_BUILD_ROOT%\output\klogg.exe"
+            "%QTDIR%\bin\windeployqt6.exe" --no-translations --no-system-d3d-compiler --no-opengl-sw "%KLOGG_BUILD_ROOT%\output\klogg_portable.exe"
+          ) else (
+            echo "windeployqt not found, skipping"
+          )
+        continue-on-error: true
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
