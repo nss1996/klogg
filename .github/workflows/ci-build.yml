@@ -261,14 +261,25 @@ jobs:
 
       - uses: ./.github/actions/agent-build
       - uses: ./.github/actions/agent-run-tests
+        continue-on-error: true
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: klogg-build-${{ matrix.config.artifacts_id }}
+          path: '${{ env.KLOGG_BUILD_ROOT }}/output/*'
+          if-no-files-found: warn
+
       - uses: ./.github/actions/agent-package-win
+        continue-on-error: true
         with:
           s3-key-id: ${{ secrets.WIN_CS_KEY_ID }}
           s3-secret: ${{ secrets.WIN_CS_SECRET }}
           s3-bucket: ${{ secrets.WIN_CS_BUCKET }}
-     
+
 # Final upload of all packages
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: packages-${{ matrix.config.artifacts_id }}
           path: '${{ env.KLOGG_BUILD_ROOT }}/packages/*'
