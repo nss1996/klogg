@@ -58,7 +58,9 @@
 
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QDir>
 #include <QDialogButtonBox>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -66,11 +68,13 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QProcess>
 #include <QProgressDialog>
 #include <QResource>
 #include <QScreen>
 #include <QShortcut>
 #include <QSortFilterProxyModel>
+#include <QStandardPaths>
 #include <QStringListModel>
 #include <QTemporaryFile>
 #include <QTextBrowser>
@@ -114,6 +118,28 @@ void signalCrawlerToFollowFile( CrawlerWidget* crawler_widget )
 }
 
 static constexpr auto ClipboardMaxTry = 5;
+
+bool adbHasAuthorizedDevice( const QString& adbExecutable )
+{
+    QProcess process;
+    process.start( adbExecutable, QStringList() << QStringLiteral( "devices" ) );
+    if ( !process.waitForFinished( 8000 ) ) {
+        return false;
+    }
+    if ( process.exitCode() != 0 ) {
+        return false;
+    }
+    const auto out = QString::fromUtf8( process.readAllStandardOutput() );
+    const auto lines = out.split( QLatin1Char( '\n' ) );
+    for ( int i = 1; i < lines.size(); ++i ) {
+        const QString line = lines.at( i ).trimmed();
+        if ( line.endsWith( QLatin1String( "\tdevice" ) )
+             || line.endsWith( QLatin1String( " device" ) ) ) {
+            return true;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -260,6 +286,9 @@ void MainWindow::reloadSession()
         if ( crawler_widget ) {
             mainTabWidget_.addCrawler( crawler_widget, file_name );
 
+            connect( crawler_widget, &CrawlerWidget::colorLabelsChanged, this,
+                     &MainWindow::onColorLabelsChanged );
+
             if ( followFileOnLoad ) {
                 signalCrawlerToFollowFile( crawler_widget );
             }
@@ -399,6 +428,11 @@ void MainWindow::reTranslateUI()
 
     showScratchPadAction->setText( transAction( action::showScratchPadText ) );
     showScratchPadAction->setStatusTip( transAction( action::showScratchPadStatusTip ) );
+
+    adbLogcatStartAction->setText( transAction( action::adbLogcatStartText ) );
+    adbLogcatStartAction->setStatusTip( transAction( action::adbLogcatStartStatusTip ) );
+    adbLogcatStopAction->setText( transAction( action::adbLogcatStopText ) );
+    adbLogcatStopAction->setStatusTip( transAction( action::adbLogcatStopStatusTip ) );
 
     auto curFavoritesIconText = addToFavoritesAction->data().toBool()
                                     ? transAction( action::addToFavoritesText )
@@ -633,6 +667,17 @@ void MainWindow::createActions()
     connect( showScratchPadAction, &QAction::triggered, this,
              [ this ]( auto ) { this->showScratchPad(); } );
 
+    adbLogcatStartAction = new QAction( tr( action::adbLogcatStartText ), this );
+    adbLogcatStartAction->setStatusTip( tr( action::adbLogcatStartStatusTip ) );
+    connect( adbLogcatStartAction, &QAction::triggered, this,
+             [ this ]( auto ) { this->startAdbLogcat(); } );
+
+    adbLogcatStopAction = new QAction( tr( action::adbLogcatStopText ), this );
+    adbLogcatStopAction->setStatusTip( tr( action::adbLogcatStopStatusTip ) );
+    adbLogcatStopAction->setEnabled( false );
+    connect( adbLogcatStopAction, &QAction::triggered, this,
+             [ this ]( auto ) { this->stopAdbLogcat(); } );
+
     encodingGroup = new QActionGroup( this );
     connect( encodingGroup, &QActionGroup::triggered, this, &MainWindow::encodingChanged );
 
@@ -810,6 +855,9 @@ void MainWindow::createMenus()
     toolsMenu->addAction( predefinedFiltersDialogAction );
 
     toolsMenu->addSeparator();
+    toolsMenu->addAction( adbLogcatStartAction );
+    toolsMenu->addAction( adbLogcatStopAction );
+    toolsMenu->addSeparator();
     toolsMenu->addAction( showScratchPadAction );
 
     menuBar()->addMenu( EncodingMenu::generate( encodingGroup ) );
@@ -829,6 +877,10 @@ void MainWindow::createMenus()
     helpMenu->addSeparator();
     helpMenu->addAction( aboutQtAction );
     helpMenu->addAction( aboutAction );
+
+    // ADB capture actions in menu bar (right after the last menu)
+    menuBar()->addAction( adbLogcatStartAction );
+    menuBar()->addAction( adbLogcatStopAction );
 }
 
 void MainWindow::createToolBars()
@@ -1549,6 +1601,8 @@ void MainWindow::closeEvent( QCloseEvent* event )
         this->hide();
     }
     else {
+        cleanupAdbLogcatProcess();
+
         const auto saveSettings = session_.close();
         if ( saveSettings ) {
             writeSettings();
@@ -1779,6 +1833,15 @@ bool MainWindow::loadFile( const QString& fileName, bool followFile )
             // mainTabWidget_.setEnabled( false );
 
             int index = mainTabWidget_.addCrawler( crawler_widget, fileName );
+
+            // Connect color labels signal for cross-tab sync
+            connect( crawler_widget, &CrawlerWidget::colorLabelsChanged, this,
+                     &MainWindow::onColorLabelsChanged );
+
+            // Apply global color labels to the new tab
+            if ( !globalColorLabels_.empty() ) {
+                crawler_widget->restoreColorLabels( globalColorLabels_ );
+            }
 
             // Setting the new tab, the user will see a blank page for the duration
             // of the loading, with no way to switch to another tab
@@ -2260,5 +2323,230 @@ void MainWindow::generateDump()
 
     if ( userAction == QMessageBox::Yes ) {
         throw std::logic_error( "test dump" );
+    }
+}
+
+void MainWindow::cleanupAdbLogcatProcess()
+{
+    if ( adbLogcatProcess_ == nullptr ) {
+        return;
+    }
+
+    adbLogcatProcess_->terminate();
+    if ( !adbLogcatProcess_->waitForFinished( 3000 ) ) {
+        adbLogcatProcess_->kill();
+        adbLogcatProcess_->waitForFinished( 1000 );
+    }
+    adbLogcatProcess_->deleteLater();
+    adbLogcatProcess_ = nullptr;
+
+    if ( adbLogcatOutputFile_ ) {
+        adbLogcatOutputFile_->close();
+        delete adbLogcatOutputFile_;
+        adbLogcatOutputFile_ = nullptr;
+    }
+
+    if ( adbLogcatStartAction != nullptr ) {
+        adbLogcatStartAction->setEnabled( true );
+    }
+    if ( adbLogcatStopAction != nullptr ) {
+        adbLogcatStopAction->setEnabled( false );
+    }
+}
+
+void MainWindow::stopAdbLogcat()
+{
+    if ( adbLogcatProcess_ == nullptr ) {
+        return;
+    }
+
+    cleanupAdbLogcatProcess();
+
+    if ( !adbLogcatFilePath_.isEmpty() ) {
+        QMessageBox::information(
+            this, tr( "klogg" ),
+            tr( "Log capture stopped. File:\n%1\n\nThe file remains open for searching." )
+                .arg( QDir::toNativeSeparators( adbLogcatFilePath_ ) ) );
+    }
+}
+
+void MainWindow::onAdbLogcatReadyRead()
+{
+    if ( !adbLogcatProcess_ || !adbLogcatOutputFile_ ) {
+        return;
+    }
+    const QByteArray chunk = adbLogcatProcess_->readAllStandardOutput();
+    if ( !chunk.isEmpty() ) {
+        adbLogcatOutputFile_->write( chunk );
+        adbLogcatOutputFile_->flush();
+    }
+}
+
+void MainWindow::startAdbLogcat()
+{
+    if ( adbLogcatProcess_ != nullptr ) {
+        return;
+    }
+
+    const QString adbExecutable = QStandardPaths::findExecutable( QStringLiteral( "adb" ) );
+    if ( adbExecutable.isEmpty() ) {
+        QMessageBox::warning( this, tr( "klogg" ),
+                              tr( "Could not find adb in PATH. Install Android platform-tools." ) );
+        return;
+    }
+
+    if ( !adbHasAuthorizedDevice( adbExecutable ) ) {
+        QMessageBox::warning(
+            this, tr( "klogg" ),
+            tr( "No authorized device found. Connect a device and check \"adb devices\"." ) );
+        return;
+    }
+
+    const auto& config = Configuration::get();
+    if ( !config.anyFileWatchEnabled() ) {
+        QMessageBox::information(
+            this, tr( "klogg" ),
+            tr( "File change monitoring is disabled in Preferences. "
+                "Enable \"Native file watch\" or \"Polling\" so the log view can follow new lines." ) );
+    }
+
+    // Use a fixed path so each capture overwrites the previous one
+    const QString logPath
+        = QDir( QDir::tempPath() ).filePath( QStringLiteral( "klogg_adb_logcat.log" ) );
+
+    // If previous log file exists and is non-empty, offer to save it
+    QFileInfo prevFileInfo( logPath );
+    if ( !adbLogcatSkipSavePrompt_ && prevFileInfo.exists() && prevFileInfo.size() > 0 ) {
+        QMessageBox msgBox( this );
+        msgBox.setWindowTitle( tr( "klogg" ) );
+        msgBox.setText( tr( "Previous log file exists and will be overwritten." ) );
+        msgBox.setInformativeText(
+            tr( "File: %1\nSize: %2 bytes\n\nDo you want to save it before starting a new capture?" )
+                .arg( QDir::toNativeSeparators( logPath ) )
+                .arg( prevFileInfo.size() ) );
+        auto* saveBtn = msgBox.addButton( tr( "Save As..." ), QMessageBox::AcceptRole );
+        msgBox.addButton( tr( "Discard and Start" ), QMessageBox::DestructiveRole );
+        auto* skipBtn
+            = msgBox.addButton( tr( "Always Overwrite (don't ask again)" ), QMessageBox::ActionRole );
+        auto* cancelBtn = msgBox.addButton( QMessageBox::Cancel );
+        msgBox.setDefaultButton( cancelBtn );
+        msgBox.exec();
+
+        if ( msgBox.clickedButton() == cancelBtn ) {
+            return;
+        }
+        if ( msgBox.clickedButton() == skipBtn ) {
+            adbLogcatSkipSavePrompt_ = true;
+            // Fall through to start capture (overwrite)
+        }
+        if ( msgBox.clickedButton() == saveBtn ) {
+            const QString savePath = QFileDialog::getSaveFileName(
+                this, tr( "Save previous log" ), QString(), tr( "Log files (*.log);;All files (*)" ) );
+            if ( savePath.isEmpty() ) {
+                return; // User cancelled save dialog
+            }
+            if ( QFile::exists( savePath ) ) {
+                QFile::remove( savePath );
+            }
+            if ( !QFile::copy( logPath, savePath ) ) {
+                QMessageBox::warning( this, tr( "klogg" ),
+                                      tr( "Failed to save file to:\n%1" ).arg( savePath ) );
+                return;
+            }
+        }
+    }
+
+    // Save search text and color labels from the current tab so we can carry them to the new tab
+    QString previousSearchText;
+    ColorLabelsManager::QuickHighlightersCollection previousColorLabels;
+    if ( auto* currentCrawler = currentCrawlerWidget() ) {
+        previousSearchText = currentCrawler->currentSearchText();
+        previousColorLabels = currentCrawler->currentColorLabels();
+    }
+
+    // If the file is already open in a tab, close that tab first
+    auto* existingView = static_cast<CrawlerWidget*>( session_.getViewIfOpen( logPath ) );
+    if ( existingView ) {
+        int tabIndex = mainTabWidget_.indexOf( existingView );
+        if ( tabIndex >= 0 ) {
+            closeTab( tabIndex, ActionInitiator::App );
+        }
+    }
+
+    // Clear device log buffer
+    QProcess clearProc;
+    clearProc.start( adbExecutable,
+                     QStringList() << QStringLiteral( "logcat" ) << QStringLiteral( "-c" ) );
+    if ( !clearProc.waitForFinished( 15000 ) ) {
+        QMessageBox::critical( this, tr( "klogg" ), tr( "adb logcat -c timed out." ) );
+        return;
+    }
+    if ( clearProc.exitCode() != 0 ) {
+        const auto err = QString::fromUtf8( clearProc.readAllStandardError() );
+        QMessageBox::critical( this, tr( "klogg" ),
+                               tr( "adb logcat -c failed:\n%1" ).arg( err ) );
+        return;
+    }
+
+    // Open the output file for writing (truncate to overwrite previous content)
+    adbLogcatOutputFile_ = new QFile( logPath, this );
+    if ( !adbLogcatOutputFile_->open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
+        QMessageBox::critical( this, tr( "klogg" ),
+                               tr( "Could not open log file for writing:\n%1" )
+                                   .arg( QDir::toNativeSeparators( logPath ) ) );
+        delete adbLogcatOutputFile_;
+        adbLogcatOutputFile_ = nullptr;
+        return;
+    }
+    adbLogcatFilePath_ = logPath;
+
+    // Start adb logcat process (do NOT use setStandardOutputFile to avoid buffering)
+    adbLogcatProcess_ = new QProcess( this );
+    connect( adbLogcatProcess_, &QProcess::readyReadStandardOutput, this,
+             &MainWindow::onAdbLogcatReadyRead );
+    adbLogcatProcess_->start( adbExecutable,
+                              QStringList() << QStringLiteral( "logcat" ) << QStringLiteral( "-v" )
+                                            << QStringLiteral( "threadtime" ) );
+    if ( !adbLogcatProcess_->waitForStarted( 5000 ) ) {
+        QMessageBox::critical( this, tr( "klogg" ), tr( "Could not start adb logcat." ) );
+        adbLogcatProcess_->deleteLater();
+        adbLogcatProcess_ = nullptr;
+        adbLogcatOutputFile_->close();
+        delete adbLogcatOutputFile_;
+        adbLogcatOutputFile_ = nullptr;
+        return;
+    }
+
+    // Open the file in klogg with follow mode
+    if ( !loadFile( logPath, true ) ) {
+        cleanupAdbLogcatProcess();
+        return;
+    }
+
+    // Set search text from previous tab and enable auto-refresh for real-time filtering
+    // Also restore color labels (Ctrl+D highlights) from previous tab
+    if ( auto* crawler = currentCrawlerWidget() ) {
+        crawler->startSearchWithAutoRefresh( previousSearchText );
+        if ( !previousColorLabels.empty() ) {
+            crawler->restoreColorLabels( previousColorLabels );
+        }
+    }
+
+    adbLogcatStartAction->setEnabled( false );
+    adbLogcatStopAction->setEnabled( true );
+}
+
+void MainWindow::onColorLabelsChanged(
+    const ColorLabelsManager::QuickHighlightersCollection& labels )
+{
+    globalColorLabels_ = labels;
+
+    // Apply to all other tabs
+    auto* senderCrawler = qobject_cast<CrawlerWidget*>( sender() );
+    for ( int i = 0; i < mainTabWidget_.count(); ++i ) {
+        auto* crawler = qobject_cast<CrawlerWidget*>( mainTabWidget_.widget( i ) );
+        if ( crawler && crawler != senderCrawler ) {
+            crawler->restoreColorLabels( labels );
+        }
     }
 }
