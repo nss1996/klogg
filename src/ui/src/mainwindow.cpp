@@ -669,17 +669,20 @@ void MainWindow::createActions()
 
     adbLogcatStartAction = new QAction( tr( action::adbLogcatStartText ), this );
     adbLogcatStartAction->setStatusTip( tr( action::adbLogcatStartStatusTip ) );
+    adbLogcatStartAction->setShortcut( QKeySequence( Qt::Key_F1 ) );
     connect( adbLogcatStartAction, &QAction::triggered, this,
              [ this ]( auto ) { this->startAdbLogcat(); } );
 
     adbLogcatStopAction = new QAction( tr( action::adbLogcatStopText ), this );
     adbLogcatStopAction->setStatusTip( tr( action::adbLogcatStopStatusTip ) );
+    adbLogcatStopAction->setShortcut( QKeySequence( Qt::Key_F2 ) );
     adbLogcatStopAction->setEnabled( false );
     connect( adbLogcatStopAction, &QAction::triggered, this,
              [ this ]( auto ) { this->stopAdbLogcat(); } );
 
-    adbLogcatQuickSaveAction = new QAction( tr( "Quick Save" ), this );
+    adbLogcatQuickSaveAction = new QAction( tr( "Quick Save(F3)" ), this );
     adbLogcatQuickSaveAction->setStatusTip( tr( "Save current log with timestamp" ) );
+    adbLogcatQuickSaveAction->setShortcut( QKeySequence( Qt::Key_F3 ) );
     connect( adbLogcatQuickSaveAction, &QAction::triggered, this,
              [ this ]( auto ) { this->quickSaveAdbLogcat(); } );
 
