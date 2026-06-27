@@ -615,7 +615,7 @@ void MainWindow::createActions()
     signalMux_.connect( stopAction, SIGNAL( triggered() ), SLOT( stopLoading() ) );
 
     optionsAction = new QAction( tr( action::optionsText ), this );
-    optionsAction->setMenuRole( QAction::PreferencesRole );
+    optionsAction->setMenuRole( QAction::NoRole );
     optionsAction->setStatusTip( tr( action::optionsStatusTip ) );
     connect( optionsAction, &QAction::triggered, this, [ this ]( auto ) { this->options(); } );
 
@@ -677,6 +677,11 @@ void MainWindow::createActions()
     adbLogcatStopAction->setEnabled( false );
     connect( adbLogcatStopAction, &QAction::triggered, this,
              [ this ]( auto ) { this->stopAdbLogcat(); } );
+
+    adbLogcatQuickSaveAction = new QAction( tr( "Quick Save" ), this );
+    adbLogcatQuickSaveAction->setStatusTip( tr( "Save current log with timestamp" ) );
+    connect( adbLogcatQuickSaveAction, &QAction::triggered, this,
+             [ this ]( auto ) { this->quickSaveAdbLogcat(); } );
 
     encodingGroup = new QActionGroup( this );
     connect( encodingGroup, &QActionGroup::triggered, this, &MainWindow::encodingChanged );
@@ -881,6 +886,7 @@ void MainWindow::createMenus()
     // ADB capture actions in menu bar (right after the last menu)
     menuBar()->addAction( adbLogcatStartAction );
     menuBar()->addAction( adbLogcatStopAction );
+    menuBar()->addAction( adbLogcatQuickSaveAction );
 }
 
 void MainWindow::createToolBars()
@@ -2410,51 +2416,9 @@ void MainWindow::startAdbLogcat()
                 "Enable \"Native file watch\" or \"Polling\" so the log view can follow new lines." ) );
     }
 
-    // Use a fixed path so each capture overwrites the previous one
+    // Use a fixed path; user can "Quick Save" before next capture to preserve
     const QString logPath
         = QDir( QDir::tempPath() ).filePath( QStringLiteral( "klogg_adb_logcat.log" ) );
-
-    // If previous log file exists and is non-empty, offer to save it
-    QFileInfo prevFileInfo( logPath );
-    if ( !adbLogcatSkipSavePrompt_ && prevFileInfo.exists() && prevFileInfo.size() > 0 ) {
-        QMessageBox msgBox( this );
-        msgBox.setWindowTitle( tr( "klogg" ) );
-        msgBox.setText( tr( "Previous log file exists and will be overwritten." ) );
-        msgBox.setInformativeText(
-            tr( "File: %1\nSize: %2 bytes\n\nDo you want to save it before starting a new capture?" )
-                .arg( QDir::toNativeSeparators( logPath ) )
-                .arg( prevFileInfo.size() ) );
-        auto* saveBtn = msgBox.addButton( tr( "Save As..." ), QMessageBox::AcceptRole );
-        msgBox.addButton( tr( "Discard and Start" ), QMessageBox::DestructiveRole );
-        auto* skipBtn
-            = msgBox.addButton( tr( "Always Overwrite (don't ask again)" ), QMessageBox::ActionRole );
-        auto* cancelBtn = msgBox.addButton( QMessageBox::Cancel );
-        msgBox.setDefaultButton( cancelBtn );
-        msgBox.exec();
-
-        if ( msgBox.clickedButton() == cancelBtn ) {
-            return;
-        }
-        if ( msgBox.clickedButton() == skipBtn ) {
-            adbLogcatSkipSavePrompt_ = true;
-            // Fall through to start capture (overwrite)
-        }
-        if ( msgBox.clickedButton() == saveBtn ) {
-            const QString savePath = QFileDialog::getSaveFileName(
-                this, tr( "Save previous log" ), QString(), tr( "Log files (*.log);;All files (*)" ) );
-            if ( savePath.isEmpty() ) {
-                return; // User cancelled save dialog
-            }
-            if ( QFile::exists( savePath ) ) {
-                QFile::remove( savePath );
-            }
-            if ( !QFile::copy( logPath, savePath ) ) {
-                QMessageBox::warning( this, tr( "klogg" ),
-                                      tr( "Failed to save file to:\n%1" ).arg( savePath ) );
-                return;
-            }
-        }
-    }
 
     // Save search text and color labels from the current tab so we can carry them to the new tab
     QString previousSearchText;
@@ -2534,6 +2498,31 @@ void MainWindow::startAdbLogcat()
 
     adbLogcatStartAction->setEnabled( false );
     adbLogcatStopAction->setEnabled( true );
+}
+
+void MainWindow::quickSaveAdbLogcat()
+{
+    const QString logPath
+        = QDir( QDir::tempPath() ).filePath( QStringLiteral( "klogg_adb_logcat.log" ) );
+    QFileInfo fileInfo( logPath );
+    if ( !fileInfo.exists() || fileInfo.size() == 0 ) {
+        QMessageBox::information( this, tr( "klogg" ), tr( "No log file to save." ) );
+        return;
+    }
+
+    const QString timestamp
+        = QDateTime::currentDateTime().toString( QStringLiteral( "yyyyMMdd_HHmmss" ) );
+    const QString savePath = QDir( QDir::tempPath() )
+                                 .filePath( QStringLiteral( "klogg_adb_logcat_%1.log" ).arg( timestamp ) );
+
+    if ( QFile::copy( logPath, savePath ) ) {
+        QMessageBox::information(
+            this, tr( "klogg" ),
+            tr( "Log saved to:\n%1" ).arg( QDir::toNativeSeparators( savePath ) ) );
+    }
+    else {
+        QMessageBox::warning( this, tr( "klogg" ), tr( "Failed to save log file." ) );
+    }
 }
 
 void MainWindow::onColorLabelsChanged(

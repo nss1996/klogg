@@ -140,6 +140,7 @@ class MainWindow : public QMainWindow {
     void generateDump();
     void startAdbLogcat();
     void stopAdbLogcat();
+    void quickSaveAdbLogcat();
     void onAdbLogcatReadyRead();
     void onColorLabelsChanged( const ColorLabelsManager::QuickHighlightersCollection& labels );
 
@@ -288,6 +289,7 @@ class MainWindow : public QMainWindow {
     QAction* generateDumpAction;
     QAction* adbLogcatStartAction;
     QAction* adbLogcatStopAction;
+    QAction* adbLogcatQuickSaveAction;
     QActionGroup* encodingGroup;
     QAction* addToFavoritesAction;
     QAction* addToFavoritesMenuAction;
@@ -328,7 +330,6 @@ class MainWindow : public QMainWindow {
     QProcess* adbLogcatProcess_ = nullptr;
     QString adbLogcatFilePath_;
     QFile* adbLogcatOutputFile_ = nullptr;
-    bool adbLogcatSkipSavePrompt_ = false;
 
     ColorLabelsManager::QuickHighlightersCollection globalColorLabels_;
 
