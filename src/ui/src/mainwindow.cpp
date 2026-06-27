@@ -2346,12 +2346,6 @@ void MainWindow::cleanupAdbLogcatProcess()
     adbLogcatProcess_->deleteLater();
     adbLogcatProcess_ = nullptr;
 
-    if ( adbLogcatOutputFile_ ) {
-        adbLogcatOutputFile_->close();
-        delete adbLogcatOutputFile_;
-        adbLogcatOutputFile_ = nullptr;
-    }
-
     if ( adbLogcatStartAction != nullptr ) {
         adbLogcatStartAction->setEnabled( true );
     }
@@ -2373,18 +2367,6 @@ void MainWindow::stopAdbLogcat()
             this, tr( "klogg" ),
             tr( "Log capture stopped. File:\n%1\n\nThe file remains open for searching." )
                 .arg( QDir::toNativeSeparators( adbLogcatFilePath_ ) ) );
-    }
-}
-
-void MainWindow::onAdbLogcatReadyRead()
-{
-    if ( !adbLogcatProcess_ || !adbLogcatOutputFile_ ) {
-        return;
-    }
-    const QByteArray chunk = adbLogcatProcess_->readAllStandardOutput();
-    if ( !chunk.isEmpty() ) {
-        adbLogcatOutputFile_->write( chunk );
-        adbLogcatOutputFile_->flush();
     }
 }
 
@@ -2452,22 +2434,11 @@ void MainWindow::startAdbLogcat()
         return;
     }
 
-    // Open the output file for writing (truncate to overwrite previous content)
-    adbLogcatOutputFile_ = new QFile( logPath, this );
-    if ( !adbLogcatOutputFile_->open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
-        QMessageBox::critical( this, tr( "klogg" ),
-                               tr( "Could not open log file for writing:\n%1" )
-                                   .arg( QDir::toNativeSeparators( logPath ) ) );
-        delete adbLogcatOutputFile_;
-        adbLogcatOutputFile_ = nullptr;
-        return;
-    }
     adbLogcatFilePath_ = logPath;
 
-    // Start adb logcat process (do NOT use setStandardOutputFile to avoid buffering)
+    // Start adb logcat process - write directly to file via kernel (no Qt event loop bottleneck)
     adbLogcatProcess_ = new QProcess( this );
-    connect( adbLogcatProcess_, &QProcess::readyReadStandardOutput, this,
-             &MainWindow::onAdbLogcatReadyRead );
+    adbLogcatProcess_->setStandardOutputFile( logPath, QIODevice::Truncate );
     adbLogcatProcess_->start( adbExecutable,
                               QStringList() << QStringLiteral( "logcat" ) << QStringLiteral( "-v" )
                                             << QStringLiteral( "threadtime" ) );
@@ -2475,9 +2446,6 @@ void MainWindow::startAdbLogcat()
         QMessageBox::critical( this, tr( "klogg" ), tr( "Could not start adb logcat." ) );
         adbLogcatProcess_->deleteLater();
         adbLogcatProcess_ = nullptr;
-        adbLogcatOutputFile_->close();
-        delete adbLogcatOutputFile_;
-        adbLogcatOutputFile_ = nullptr;
         return;
     }
 

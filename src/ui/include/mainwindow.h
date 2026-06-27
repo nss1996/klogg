@@ -141,7 +141,6 @@ class MainWindow : public QMainWindow {
     void startAdbLogcat();
     void stopAdbLogcat();
     void quickSaveAdbLogcat();
-    void onAdbLogcatReadyRead();
     void onColorLabelsChanged( const ColorLabelsManager::QuickHighlightersCollection& labels );
 
     // Change the view settings
@@ -329,7 +328,6 @@ class MainWindow : public QMainWindow {
 
     QProcess* adbLogcatProcess_ = nullptr;
     QString adbLogcatFilePath_;
-    QFile* adbLogcatOutputFile_ = nullptr;
 
     ColorLabelsManager::QuickHighlightersCollection globalColorLabels_;
 
