@@ -2341,11 +2341,8 @@ void MainWindow::cleanupAdbLogcatProcess()
         return;
     }
 
-    adbLogcatProcess_->terminate();
-    if ( !adbLogcatProcess_->waitForFinished( 3000 ) ) {
-        adbLogcatProcess_->kill();
-        adbLogcatProcess_->waitForFinished( 1000 );
-    }
+    adbLogcatProcess_->kill();
+    adbLogcatProcess_->waitForFinished( 500 );
     adbLogcatProcess_->deleteLater();
     adbLogcatProcess_ = nullptr;
 
@@ -2364,13 +2361,6 @@ void MainWindow::stopAdbLogcat()
     }
 
     cleanupAdbLogcatProcess();
-
-    if ( !adbLogcatFilePath_.isEmpty() ) {
-        QMessageBox::information(
-            this, tr( "klogg" ),
-            tr( "Log capture stopped. File:\n%1\n\nThe file remains open for searching." )
-                .arg( QDir::toNativeSeparators( adbLogcatFilePath_ ) ) );
-    }
 }
 
 void MainWindow::startAdbLogcat()
